@@ -10,10 +10,15 @@ pub fn normalize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
         return types.ParseError.InputTooLarge;
     }
 
-    const normalized = try stripHtml(allocator, input);
-    const escaped_entities = try unescapedEntities(allocator, normalized);
+    const noHtml = try stripHtml(allocator, input);
+    const escaped_entities = try unescapedEntities(allocator, noHtml);
+    const noMarkdown = try stripMarkdown(allocator, escaped_entities);
+    const replaceUnicode = try convertUnicode(allocator, noMarkdown);
+    const floatingMixedNumbers = try convertMixedNumbers(allocator, replaceUnicode);
 
-    return escaped_entities;
+    const normalized = floatingMixedNumbers;
+
+    return normalized;
 }
 
 fn stripHtml(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
@@ -89,7 +94,7 @@ fn unescapedEntities(allocator: std.mem.Allocator, input: []const u8) ![]const u
 }
 
 fn unescapeChar(char: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, char, "nbsp")) return " "; 
+    if (std.mem.eql(u8, char, "nbsp")) return " ";
     if (std.mem.eql(u8, char, "amp")) return "&";
     if (std.mem.eql(u8, char, "lt")) return "<";
     if (std.mem.eql(u8, char, "gt")) return ">";
@@ -101,6 +106,186 @@ fn unescapeChar(char: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, char, "frac13")) return "1/3";
     if (std.mem.eql(u8, char, "frac23")) return "2/3";
     return null;
+}
+
+fn stripMarkdown(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    var markdown_stripped: std.ArrayList(u8) = .empty;
+    errdefer markdown_stripped.deinit(allocator);
+    while (lines.next()) |line| {
+        const no_headers = try stripHeadingMarks(allocator, line);
+        defer allocator.free(no_headers);
+        const no_stars = try stripBoldAndItalicMarkers(allocator, no_headers);
+        defer allocator.free(no_stars);
+        const no_links = try stripInlineLinks(allocator, no_stars);
+        defer allocator.free(no_links);
+        try markdown_stripped.appendSlice(allocator, no_links);
+    }
+
+    return try markdown_stripped.toOwnedSlice(allocator);
+}
+
+fn stripHeadingMarks(allocator: std.mem.Allocator, line: []const u8) ![]const u8 {
+    var no_headers: std.ArrayList(u8) = .empty;
+    errdefer no_headers.deinit(allocator);
+    var i: usize = 0;
+    if (line.len > 0 and line[0] == '#') {
+        while (i < line.len and line[i] == '#') : (i += 1) {}
+        if (i < line.len and line[i] == ' ') i += 1;
+    }
+    try no_headers.appendSlice(allocator, line[i..]);
+    try no_headers.append(allocator, '\n');
+
+    return try no_headers.toOwnedSlice(allocator);
+}
+
+fn stripBoldAndItalicMarkers(allocator: std.mem.Allocator, line: []const u8) ![]const u8 {
+    var no_stars: std.ArrayList(u8) = .empty;
+    errdefer no_stars.deinit(allocator);
+    var i: usize = 0;
+    while (i < line.len) {
+        if (line[i] == '*') {
+            const start = i;
+            while (i < line.len and line[i] == '*') : (i += 1) {}
+            const prev: u8 = if (start > 0) line[start - 1] else ' ';
+            const next: u8 = if (i < line.len) line[i] else ' ';
+            if (prev == ' ' and next == ' ') {
+                try no_stars.appendSlice(allocator, line[start..i]);
+            }
+        } else {
+            try no_stars.append(allocator, line[i]);
+            i += 1;
+        }
+    }
+    return try no_stars.toOwnedSlice(allocator);
+}
+
+fn stripInlineLinks(allocator: std.mem.Allocator, line: []const u8) ![]const u8 {
+    var no_inline_url: std.ArrayList(u8) = .empty;
+    errdefer no_inline_url.deinit(allocator);
+    var i: usize = 0;
+    while (i < line.len) {
+        if (line[i] == '[') {
+            i += 1;
+            const start = i;
+            while (i < line.len and line[i] != ']') : (i += 1) {}
+            const text = line[start..i];
+            i += 1;
+            if (i < line.len and line[i] == '(') {
+                try no_inline_url.appendSlice(allocator, text);
+                while (i < line.len and line[i] != ')') : (i += 1) {}
+                i += 1;
+            } else {
+                try no_inline_url.append(allocator, '[');
+                try no_inline_url.appendSlice(allocator, text);
+            }
+        } else {
+            try no_inline_url.append(allocator, line[i]);
+            i += 1;
+        }
+    }
+    return try no_inline_url.toOwnedSlice(allocator);
+}
+
+fn convertUnicode(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    const view = try std.unicode.Utf8View.init(input);
+    var it = view.iterator();
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    while (true) {
+        const start = it.i;
+        const cp = it.nextCodepoint() orelse break;
+        switch (cp) {
+            '\u{2018}', '\u{2019}' => try output.append(allocator, '\''),
+            '\u{201C}', '\u{201D}' => try output.append(allocator, '"'),
+            '\u{2013}', '\u{2014}' => try output.append(allocator, '-'),
+            '½' => try output.appendSlice(allocator, "1/2"),
+            '¼' => try output.appendSlice(allocator, "1/4"),
+            '¾' => try output.appendSlice(allocator, "3/4"),
+            '⅓' => try output.appendSlice(allocator, "1/3"),
+            '⅔' => try output.appendSlice(allocator, "2/3"),
+            '⅛' => try output.appendSlice(allocator, "1/8"),
+            else => try output.appendSlice(allocator, it.bytes[start..it.i]),
+        }
+    }
+    return try output.toOwnedSlice(allocator);
+}
+
+fn convertMixedNumbers(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    var lines = std.mem.splitScalar(u8, input, '\n');
+
+    while (lines.next()) |line| {
+        const expanded = try expandMixedNumbersInLine(allocator, line);
+        defer allocator.free(expanded);
+        try output.appendSlice(allocator, expanded);
+        try output.append(allocator, '\n');
+    }
+
+    return try output.toOwnedSlice(allocator);
+}
+
+fn expandMixedNumbersInLine(allocator: std.mem.Allocator, line: []const u8) ![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    var i: usize = 0;
+
+    while (i < line.len) {
+        if (std.ascii.isDigit(line[i])) {
+            const int_start = 1;
+            while (i < line.len and std.ascii.isDigit(line[i])) : (i += 1) {}
+            const int_end = i;
+
+            //check for space then digit
+            if (i < line.len and
+                line[i] == ' ' and
+                i + 1 < line.len and
+                std.ascii.isDigit(line[i + 1]))
+            {
+                //look for slash and number
+                const num_start = i + 1;
+                var j = num_start;
+                while (j < line.len and std.ascii.isDigit(line[j])) : (j += 1) {}
+
+                if (j < line.len and line[j] == '/' and
+                    j + 1 < line.len and
+                    std.ascii.isDigit(line[j + 1]))
+                {
+                    const den_start = j + 1;
+                    var k = den_start;
+                    while (k < line.len and std.ascii.isDigit(line[k])) : (k += 1) {}
+
+                    const whole = try std.fmt.parseInt(u32, line[int_start..int_end], 10);
+                    const num = try std.fmt.parseInt(u32, line[num_start..j], 10);
+                    const den = try std.fmt.parseInt(u32, line[den_start..k], 10);
+
+                    if (den != 0) {
+                        const value: f64 = @as(f64, @floatFromInt(whole)) + @as(f64, @floatFromInt(num)) / @as(f64, @floatFromInt(den));
+                        var buf: [32]u8 = undefined;
+                        const formatted = try std.fmt.bufPrint(&buf, "{d:.2}", .{value});
+                        const trimmed = trimTrailingZeros(formatted);
+                        try output.appendSlice(allocator, trimmed);
+                        i = k;
+                        continue;
+                    }
+                }
+            }
+
+            try output.appendSlice(allocator, line[int_start..int_end]);
+        } else {
+            try output.append(allocator, line[i]);
+            i += 1;
+        }
+    }
+    return try output.toOwnedSlice(allocator);
+}
+
+fn trimTrailingZeros(s: []const u8) []const u8 {
+    var end = s.len;
+    while (end > 0 and s[end - 1] == 0) : (end -= 1) {}
+    if (end > 0 and s[end - 1] == '.') end -= 1;
+    return s[0..end];
 }
 
 test "stripHtml basic tag" {
