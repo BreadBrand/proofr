@@ -233,7 +233,7 @@ fn expandMixedNumbersInLine(allocator: std.mem.Allocator, line: []const u8) ![]c
 
     while (i < line.len) {
         if (std.ascii.isDigit(line[i])) {
-            const int_start = 1;
+            const int_start = i;
             while (i < line.len and std.ascii.isDigit(line[i])) : (i += 1) {}
             const int_end = i;
 
@@ -286,6 +286,60 @@ fn trimTrailingZeros(s: []const u8) []const u8 {
     while (end > 0 and s[end - 1] == 0) : (end -= 1) {}
     if (end > 0 and s[end - 1] == '.') end -= 1;
     return s[0..end];
+}
+
+test "strip heading markdown" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try stripMarkdown(allocator, "## Instructions");
+    try std.testing.expectEqualStrings("Instructions\n", result);
+}
+
+test "strip bold" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try stripBoldAndItalicMarkers(allocator, "**500g** flour");
+    try std.testing.expectEqualStrings("500g flour", result);
+}
+
+test "strip inline link" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try stripInlineLinks(allocator, "[click here](http://x.com)");
+    try std.testing.expectEqualStrings("click here", result);
+}
+
+test "smart quote left single" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try convertUnicode(allocator, "\u{2018}active\u{2019}");
+    try std.testing.expectEqualStrings("'active'", result);
+}
+
+test "unicode fraction half" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try convertUnicode(allocator, "½ cup");
+    try std.testing.expectEqualStrings("1/2 cup", result);
+}
+
+test "mixed number" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = try convertMixedNumbers(allocator, "2 3/4 cups Strong Bread Flour");
+    try std.testing.expectEqualStrings("2.75 cups Strong Bread Flour\n", result);
 }
 
 test "stripHtml basic tag" {
