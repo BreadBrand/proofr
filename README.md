@@ -26,4 +26,4 @@ The project is using Zig 0.16.0
 - [ ] 19 Deployment: --port flag, systemd unit, Cloudflare tunnel
 
 ## Dependency list:
-- zig fetch https://github.com/karlseguin/http.zig/commit/master.tar.gz
+- HTTPZ zig fetch https://github.com/karlseguin/http.zig/commit/master.tar.gz
