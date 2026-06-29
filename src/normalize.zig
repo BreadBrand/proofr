@@ -15,8 +15,9 @@ pub fn normalize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     const noMarkdown = try stripMarkdown(allocator, escaped_entities);
     const replaceUnicode = try convertUnicode(allocator, noMarkdown);
     const floatingMixedNumbers = try convertMixedNumbers(allocator, replaceUnicode);
+    const noArtifacts = try stripArtifactLines(allocator, floatingMixedNumbers);
 
-    const normalized = floatingMixedNumbers;
+    const normalized = noArtifacts;
 
     return normalized;
 }
@@ -283,9 +284,151 @@ fn expandMixedNumbersInLine(allocator: std.mem.Allocator, line: []const u8) ![]c
 
 fn trimTrailingZeros(s: []const u8) []const u8 {
     var end = s.len;
-    while (end > 0 and s[end - 1] == 0) : (end -= 1) {}
+    while (end > 0 and s[end - 1] == '0') : (end -= 1) {}
     if (end > 0 and s[end - 1] == '.') end -= 1;
     return s[0..end];
+}
+
+fn stripArtifactLines(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    var last_was_blank = false;
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        const is_blank = trimmed.len == 0;
+
+        if (is_blank) {
+            if (!last_was_blank) try output.append(allocator, '\n');
+            last_was_blank = true;
+            continue;
+        }
+        last_was_blank = false;
+
+        if (isBrowserArtifact(trimmed)) continue;
+        if (isRecipeUiLine(trimmed)) continue;
+        if (isUrlLine(trimmed)) continue;
+
+        try output.appendSlice(allocator, trimmed);
+        try output.append(allocator, '\n');
+    }
+
+    return try output.toOwnedSlice(allocator);
+}
+
+fn isBrowserArtifact(line: []const u8) bool {
+    var buf: [1024]u8 = undefined;
+    const lower = std.ascii.lowerString(&buf, line);
+
+    if (isPageFraction(line)) return true;
+    if (std.mem.find(u8, lower, "page") != null) return true;
+    if (std.mem.find(u8, lower, "click here") != null) return true;
+    if (std.mem.find(u8, lower, "learn more") != null) return true;
+    if (std.mem.find(u8, lower, "subscribe") != null) return true;
+    if (std.mem.find(u8, lower, "leave a comment") != null) return true;
+    if (std.mem.find(u8, lower, "home") != null) return true;
+    if (std.mem.find(u8, lower, "you might also like") != null) return true;
+    if (std.mem.find(u8, lower, "related recipes") != null) return true;
+
+    return false;
+}
+
+fn isPageFraction(line: []const u8) bool {
+    var has_slash = false;
+    for (line) |char| {
+        if (char == '/') {
+            has_slash = true;
+            continue;
+        }
+        if (char == ' ') continue;
+        if (std.ascii.isDigit(char)) continue;
+        return false;
+    }
+    return has_slash;
+}
+
+fn isRecipeUiLine(line: []const u8) bool {
+    var buf: [1024]u8 = undefined;
+    const lower = std.ascii.lowerString(&buf, line);
+
+    if (std.mem.find(u8, lower, "cook mode") != null) return true;
+    if (std.mem.find(u8, lower, "prevent your screen from going dark") != null) return true;
+
+    return false;
+}
+
+fn isUrlLine(line: []const u8) bool {
+    if (std.mem.startsWith(u8, line, "http") or std.mem.startsWith(u8, line, "https")) return true;
+    if (std.mem.find(u8, line, ".com") != null or std.mem.find(u8, line, ".org") != null) return true;
+
+    return false;
+}
+
+test "drop page fractions" {
+    try std.testing.expect(isPageFraction("1/3"));
+    try std.testing.expect(isPageFraction("                                                   2/3"));
+    try std.testing.expect(isPageFraction("1 / 3"));
+    try std.testing.expect(!isPageFraction("1/3 cup flour"));
+    try std.testing.expect(!isPageFraction("500g"));
+}
+
+test "remove browser artifacts" {
+    try std.testing.expect(isBrowserArtifact("Page"));
+    try std.testing.expect(isBrowserArtifact("click here"));
+    try std.testing.expect(isBrowserArtifact("learn more"));
+    try std.testing.expect(isBrowserArtifact("subscribe"));
+    try std.testing.expect(isBrowserArtifact("leave a comment"));
+    try std.testing.expect(isBrowserArtifact("home | recipes | login"));
+    try std.testing.expect(isBrowserArtifact("related recipes"));
+    try std.testing.expect(isBrowserArtifact("you might also like"));
+}
+
+test "remove urls" {
+    try std.testing.expect(isUrlLine("http://buiscuts.com/recipes"));
+    try std.testing.expect(isUrlLine("https://buiscuts.com/recipes"));
+    try std.testing.expect(isUrlLine("buiscuts.com/recipes/adHi128434j"));
+    try std.testing.expect(isUrlLine("buiscuts.org/recipes/fasdf8238yh"));
+    try std.testing.expect(!isUrlLine("500g / 6 cups flour"));
+}
+
+test "stripArtifacts integration" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const copyPasta = 
+        "                 1/3\n" ++
+        "Sourdough Focaccia\n" ++
+        "\n" ++
+        "Submitted by Jane\n" ++
+        "Cook Mode\n" ++
+        "https://example.com\n" ++
+        "              2 / 3\n" ++
+        "\n" ++
+        "\n" ++
+        "Ingredients\n" ++
+        "500g or 3 / 4 cup bread flour\n" ++
+        "375g water\n" ++
+        "\n" ++
+        "Click here for more\n" ++
+        "Directions\n" ++
+        "1. Mix and bake.\n";
+
+    const expected = 
+        "Sourdough Focaccia\n" ++
+        "\n" ++
+        "Submitted by Jane\n" ++
+        "\n" ++
+        "Ingredients\n" ++
+        "500g or 3 / 4 cup bread flour\n" ++
+        "375g water\n" ++
+        "\n" ++
+        "Directions\n" ++
+        "1. Mix and bake.\n\n";
+
+    const result = try stripArtifactLines(allocator, copyPasta);
+    try std.testing.expectEqualStrings(expected, result);
 }
 
 test "strip heading markdown" {
