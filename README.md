@@ -9,7 +9,7 @@ The project is using Zig 0.16.0
 - [x] 02 HTTP skeleton: handler.zig, arena allocator, CORS, OPTIONS
 - [x] 03 Stage 1a: input validation + HTML stripping + entity unescaping
 - [x] 04 Stage 1b: Markdown stripping, smart quotes, unicode fractions, mixed numbers
-- [ ] 05 Stage 1c: artifact stripping, (browser, recipe UI, URLS, CTAs)
+- [x] 05 Stage 1c: artifact stripping, (browser, recipe UI, URLS, CTAs)
 - [ ] 06 Stage 1d: nutrition markers, metadata expansion, baker% strip, temp annotation strip
 - [ ] 07 units.zig: unit table, matching, canonicalisation
 - [ ] 08 Stage 2a: sections.zig skeleton - state machine, section keywords, enum + switch
