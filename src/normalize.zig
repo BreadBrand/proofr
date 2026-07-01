@@ -14,8 +14,8 @@ pub fn normalize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     const escaped_entities = try unescapedEntities(allocator, noHtml);
     const noMarkdown = try stripMarkdown(allocator, escaped_entities);
     const replaceUnicode = try convertUnicode(allocator, noMarkdown);
-    const floatingMixedNumbers = try convertMixedNumbers(allocator, replaceUnicode);
-    const noArtifacts = try stripArtifactLines(allocator, floatingMixedNumbers);
+    // const floatingMixedNumbers = try convertMixedNumbers(allocator, replaceUnicode);
+    const noArtifacts = try stripArtifactLines(allocator, replaceUnicode);
 
     const normalized = noArtifacts;
 
@@ -201,12 +201,42 @@ fn convertUnicode(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
             '\u{2018}', '\u{2019}' => try output.append(allocator, '\''),
             '\u{201C}', '\u{201D}' => try output.append(allocator, '"'),
             '\u{2013}', '\u{2014}' => try output.append(allocator, '-'),
-            '½' => try output.appendSlice(allocator, "1/2"),
-            '¼' => try output.appendSlice(allocator, "1/4"),
-            '¾' => try output.appendSlice(allocator, "3/4"),
-            '⅓' => try output.appendSlice(allocator, "1/3"),
-            '⅔' => try output.appendSlice(allocator, "2/3"),
-            '⅛' => try output.appendSlice(allocator, "1/8"),
+            '½' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "1/2");
+            },
+            '¼' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "1/4");
+            },
+            '¾' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "3/4");
+            },
+            '⅓' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "1/3");
+            },
+            '⅔' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "2/3");
+            },
+            '⅛' => {
+                if (output.items.len > 0 and std.ascii.isDigit(output.items[output.items.len - 1])) {
+                    try output.append(allocator, ' ');
+                }
+                try output.appendSlice(allocator, "1/8");
+            },
             else => try output.appendSlice(allocator, it.bytes[start..it.i]),
         }
     }
@@ -306,20 +336,24 @@ fn stripArtifactLines(allocator: std.mem.Allocator, input: []const u8) ![]const 
         }
         last_was_blank = false;
 
-        if (isBrowserArtifact(trimmed)) continue;
+        if (try isBrowserArtifact(allocator, trimmed)) continue;
         if (isRecipeUiLine(trimmed)) continue;
         if (isUrlLine(trimmed)) continue;
 
         try output.appendSlice(allocator, trimmed);
+
         try output.append(allocator, '\n');
     }
-
-    return try output.toOwnedSlice(allocator);
+    var result = try output.toOwnedSlice(allocator);
+    if (result.len > 0 and result[result.len - 1] == '\n') {
+        result = result[0 .. result.len - 1];
+    }
+    return result;
 }
 
-fn isBrowserArtifact(line: []const u8) bool {
-    var buf: [1024]u8 = undefined;
-    const lower = std.ascii.lowerString(&buf, line);
+fn isBrowserArtifact(allocator: std.mem.Allocator, line: []const u8) !bool {
+    const lower = try std.ascii.allocLowerString(allocator, line);
+    defer allocator.free(lower);
 
     if (isPageFraction(line)) return true;
     if (std.mem.find(u8, lower, "page") != null) return true;
@@ -327,7 +361,6 @@ fn isBrowserArtifact(line: []const u8) bool {
     if (std.mem.find(u8, lower, "learn more") != null) return true;
     if (std.mem.find(u8, lower, "subscribe") != null) return true;
     if (std.mem.find(u8, lower, "leave a comment") != null) return true;
-    if (std.mem.find(u8, lower, "home") != null) return true;
     if (std.mem.find(u8, lower, "you might also like") != null) return true;
     if (std.mem.find(u8, lower, "related recipes") != null) return true;
 
@@ -374,14 +407,17 @@ test "drop page fractions" {
 }
 
 test "remove browser artifacts" {
-    try std.testing.expect(isBrowserArtifact("Page"));
-    try std.testing.expect(isBrowserArtifact("click here"));
-    try std.testing.expect(isBrowserArtifact("learn more"));
-    try std.testing.expect(isBrowserArtifact("subscribe"));
-    try std.testing.expect(isBrowserArtifact("leave a comment"));
-    try std.testing.expect(isBrowserArtifact("home | recipes | login"));
-    try std.testing.expect(isBrowserArtifact("related recipes"));
-    try std.testing.expect(isBrowserArtifact("you might also like"));
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    try std.testing.expect(try isBrowserArtifact(allocator, "Page"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "click here"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "learn more"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "subscribe"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "leave a comment"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "related recipes"));
+    try std.testing.expect(try isBrowserArtifact(allocator, "you might also like"));
 }
 
 test "remove urls" {
@@ -397,7 +433,7 @@ test "stripArtifacts integration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const copyPasta = 
+    const copyPasta =
         "                 1/3\n" ++
         "Sourdough Focaccia\n" ++
         "\n" ++
@@ -415,7 +451,7 @@ test "stripArtifacts integration" {
         "Directions\n" ++
         "1. Mix and bake.\n";
 
-    const expected = 
+    const expected =
         "Sourdough Focaccia\n" ++
         "\n" ++
         "Submitted by Jane\n" ++
@@ -425,7 +461,7 @@ test "stripArtifacts integration" {
         "375g water\n" ++
         "\n" ++
         "Directions\n" ++
-        "1. Mix and bake.\n\n";
+        "1. Mix and bake.\n";
 
     const result = try stripArtifactLines(allocator, copyPasta);
     try std.testing.expectEqualStrings(expected, result);
@@ -573,4 +609,84 @@ test "normalize oversized input" {
     const big_input = "a" ** 10001;
 
     try std.testing.expectError(types.ParseError.InputTooLarge, normalize(allocator, big_input));
+}
+
+test "normalize biscuit recipe integration" {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const input =
+        "Biscuit Recipe\n" ++
+        "Tall, flaky, buttery homemade biscuits with sky-high layers. Made with everyday whole milk and a simple fold-and-stack lamination, there’s no buttermilk required for this recipe.\n" ++
+        "Coursebread, Side Dish\n" ++
+        "CuisineAmerican\n" ++
+        "Prep Time25minutes minutes\n" ++
+        "Cook Time20minutes minutes\n" ++
+        "Total Time45minutes minutes\n" ++
+        "Servings12 servings (about)\n" ++
+        "Calories312kcal\n" ++
+        "AuthorJohn Kanell\n" ++
+        "Equipment\n" ++
+        "Baking Sheet\n" ++
+        "2 ½-3 inch Biscuit cutter\n" ++
+        "Ingredients\n" ++
+        "4 cups all-purpose flour (480g)\n" ++
+        "2 tablespoons granulated sugar\n" ++
+        "1 tablespoon baking powder\n" ++
+        "2½ teaspoons salt\n" ++
+        "1 cup very cold unsalted butter cubed (227g)\n" ++
+        "1⅓ cups cold milk (320mL)\n" ++
+        "melted butter for brushing (optional)\n" ++
+        "Instructions\n" ++
+        "Preheat the oven to 425°F. Line a baking sheet with parchment paper.\n" ++
+        "In a large bowl, whisk together the flour, sugar, baking powder, and salt.\n" ++
+        "Toss in the cubed butter to coat with flour. Using a pastry blender or by rubbing the butter pieces between your fingers, work the butter into the flour until the butter pieces range in size from peas to almonds.\n" ++
+        "Using a silicone spatula, fold the milk into the flour mixture, until most of the flour is moistened but the dough is still crumbly. (Don’t over mix it. It will come together in the next step.) Turn out onto a well-floured surface.\n" ++
+        "With floured hands, pat the dough to a 1-inch thick rectangle. Fold the dough in half. (A bench scraper or large spatula can be helpful here!) Cut the dough in half crosswise and stack the two halves on top of each other. Pat the dough into a rectangle again. Repeat folding, cutting, stacking, and patting 3 more times.\n" ++
+        "Roll the finished dough to a thickness of about ¾ to 1 inch and cut into biscuits using a 2½ to 3-inch round, floured cookie cutter. Place on prepared baking sheet. For best results, freeze the biscuits for 20 minutes.\n" ++
+        "Bake for 20 minutes or until tops and bottoms are golden brown. Immediately brush with melted butter, if desired. Enjoy hot or cool completely on a wire rack. While biscuits are best fresh from the oven, you can store at room temperature for up to 3 days.\n" ++
+        "Notes\n" ++
+        "Make sure the oven has reached 425°F before adding the biscuits. The immediate hot temperature will make sure the biscuits get nice and tall by steaming the butter.\n" ++
+        "Nutrition\n" ++
+        "Calories: 312kcal | Carbohydrates: 35g | Protein: 5g | Fat: 17g | Saturated Fat: 10g | Polyunsaturated Fat: 1g | Monounsaturated Fat: 4g | Trans Fat: 1g | Cholesterol: 43mg | Sodium: 641mg | Potassium: 85mg | Fiber: 1g | Sugar: 3g | Vitamin A: 517IU | Calcium: 100mg | Iron: 2mg\n" ++
+        "Thank You! https://preppykitchen.com/biscuit-recipe/";
+
+    const expected =
+        "Biscuit Recipe\n" ++
+        "Tall, flaky, buttery homemade biscuits with sky-high layers. Made with everyday whole milk and a simple fold-and-stack lamination, there's no buttermilk required for this recipe.\n" ++
+        "Coursebread, Side Dish\n" ++
+        "CuisineAmerican\n" ++
+        "Prep Time25minutes minutes\n" ++
+        "Cook Time20minutes minutes\n" ++
+        "Total Time45minutes minutes\n" ++
+        "Servings12 servings (about)\n" ++
+        "Calories312kcal\n" ++
+        "AuthorJohn Kanell\n" ++
+        "Equipment\n" ++
+        "Baking Sheet\n" ++
+        "2 1/2-3 inch Biscuit cutter\n" ++
+        "Ingredients\n" ++
+        "4 cups all-purpose flour (480g)\n" ++
+        "2 tablespoons granulated sugar\n" ++
+        "1 tablespoon baking powder\n" ++
+        "2 1/2 teaspoons salt\n" ++
+        "1 cup very cold unsalted butter cubed (227g)\n" ++
+        "1 1/3 cups cold milk (320mL)\n" ++
+        "melted butter for brushing (optional)\n" ++
+        "Instructions\n" ++
+        "Preheat the oven to 425°F. Line a baking sheet with parchment paper.\n" ++
+        "In a large bowl, whisk together the flour, sugar, baking powder, and salt.\n" ++
+        "Toss in the cubed butter to coat with flour. Using a pastry blender or by rubbing the butter pieces between your fingers, work the butter into the flour until the butter pieces range in size from peas to almonds.\n" ++
+        "Using a silicone spatula, fold the milk into the flour mixture, until most of the flour is moistened but the dough is still crumbly. (Don't over mix it. It will come together in the next step.) Turn out onto a well-floured surface.\n" ++
+        "With floured hands, pat the dough to a 1-inch thick rectangle. Fold the dough in half. (A bench scraper or large spatula can be helpful here!) Cut the dough in half crosswise and stack the two halves on top of each other. Pat the dough into a rectangle again. Repeat folding, cutting, stacking, and patting 3 more times.\n" ++
+        "Roll the finished dough to a thickness of about 3/4 to 1 inch and cut into biscuits using a 2 1/2 to 3-inch round, floured cookie cutter. Place on prepared baking sheet. For best results, freeze the biscuits for 20 minutes.\n" ++
+        "Bake for 20 minutes or until tops and bottoms are golden brown. Immediately brush with melted butter, if desired. Enjoy hot or cool completely on a wire rack. While biscuits are best fresh from the oven, you can store at room temperature for up to 3 days.\n" ++
+        "Notes\n" ++
+        "Make sure the oven has reached 425°F before adding the biscuits. The immediate hot temperature will make sure the biscuits get nice and tall by steaming the butter.\n" ++
+        "Nutrition\n" ++
+        "Calories: 312kcal | Carbohydrates: 35g | Protein: 5g | Fat: 17g | Saturated Fat: 10g | Polyunsaturated Fat: 1g | Monounsaturated Fat: 4g | Trans Fat: 1g | Cholesterol: 43mg | Sodium: 641mg | Potassium: 85mg | Fiber: 1g | Sugar: 3g | Vitamin A: 517IU | Calcium: 100mg | Iron: 2mg\n";
+
+    const result = try normalize(allocator, input);
+    try std.testing.expectEqualStrings(expected, result);
 }
