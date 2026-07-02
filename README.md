@@ -12,7 +12,7 @@ The project is using Zig 0.16.0
 - [x] 05 Stage 1c: artifact stripping, (browser, recipe UI, URLS, CTAs)
 - [ ] ~~06 Stage 1d: nutrition markers, metadata expansion, baker% strip, temp annotation strip~~
 - [x] 07 units.zig: unit table, matching, canonicalisation
-- [ ] 08 Stage 2a: sections.zig skeleton - state machine, section keywords, enum + switch
+- [x] 08 Stage 2a: sections.zig skeleton - state machine, section keywords, enum + switch
 - [ ] 09 Stage 2b: subsection header detection, ingredient groups, phase routing
 - [ ] 10 Stage 2c: title detection, description, notes buffer, nutrition buffer
 - [ ] 11 Stage 3a: bullet strip, yeast alternatives, no-quantity patterns, quantity extraction
